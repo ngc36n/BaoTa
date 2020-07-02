@@ -1,3 +1,4 @@
+#!/bin/python
 #coding: utf-8
 # +-------------------------------------------------------------------
 # | 宝塔Linux面板
@@ -11,8 +12,8 @@
 # 计划任务
 #------------------------------
 import sys,os,json,psutil
-sys.path.append("class/")
-import db,public,time
+sys.path.insert(0,"/www/server/panel/class/")
+import db,public,time,panelTask,setPanelLets
 global pre,timeoutCount,logPath,isTask,oldEdate,isCheck
 pre = 0
 timeoutCount = 0
@@ -39,7 +40,7 @@ def ExecShell(cmdstring, cwd=None, timeout=None, shell=True):
     
         if timeout:
             end_time = datetime.datetime.now() + datetime.timedelta(seconds=timeout)
-        sub = subprocess.Popen(cmdstring+' &> '+logPath+' 2>&1', cwd=cwd, stdin=subprocess.PIPE,shell=shell,bufsize=4096)
+        sub = subprocess.Popen(cmdstring+' &> '+logPath, cwd=cwd, stdin=subprocess.PIPE,shell=shell,bufsize=4096)
         
         while sub.poll() is None:
             time.sleep(0.1)
@@ -54,7 +55,7 @@ def DownloadFile(url,filename):
         import urllib,socket
         socket.setdefaulttimeout(10)
         urllib.urlretrieve(url,filename=filename ,reporthook= DownloadHook)
-        os.system('chown www.www ' + filename);
+        public.ExecShell('chown www.www ' + filename);
         WriteLogs('done')
     except:
         WriteLogs('done')
@@ -104,7 +105,7 @@ def startTask():
                             ExecShell(value['execstr'])
                         end = int(time.time())
                         sql.table('tasks').where("id=?",(value['id'],)).save('status,end',('1',end))
-                        if(sql.table('tasks').where("status=?",('0')).count() < 1): os.system('rm -f ' + isTask);
+                        if(sql.table('tasks').where("status=?",('0')).count() < 1): public.ExecShell('rm -f ' + isTask);
             except:
                 pass
             siteEdate();
@@ -302,9 +303,10 @@ def GetMemUsed():
 #检查502错误 
 def check502():
     try:
-        phpversions = ['53','54','55','56','70','71','72']
+        phpversions = ['53','54','55','56','70','71','72','73','74']
         for version in phpversions:
-            if not os.path.exists('/etc/init.d/php-fpm-'+version): continue;
+            php_path = '/www/server/php/' + version + '/sbin/php-fpm'
+            if not os.path.exists(php_path): continue;
             if checkPHPVersion(version): continue;
             if startPHPVersion(version):
                 public.WriteLog('PHP守护程序','检测到PHP-' + version + '处理异常,已自动修复!')
@@ -315,20 +317,23 @@ def check502():
 def startPHPVersion(version):
     try:
         fpm = '/etc/init.d/php-fpm-'+version
-        if not os.path.exists(fpm): return False;
+        php_path = '/www/server/php/' + version + '/sbin/php-fpm'
+        if not os.path.exists(php_path): 
+            if os.path.exists(fpm): os.remove(fpm)
+            return False;
         
         #尝试重载服务
-        os.system(fpm + ' reload');
+        public.ExecShell(fpm + ' reload');
         if checkPHPVersion(version): return True;
         
         #尝试重启服务
-        cgi = '/tmp/php-cgi-'+version
-        pid = '/www/server/php'+version+'/php-fpm.pid';
-        os.system('pkill -9 php-fpm-'+version)
+        cgi = '/tmp/php-cgi-'+version + '.sock'
+        pid = '/www/server/php/'+version+'/var/run/php-fpm.pid';
+        public.ExecShell('pkill -9 php-fpm-'+version)
         time.sleep(0.5);
-        if not os.path.exists(cgi): os.system('rm -f ' + cgi);
-        if not os.path.exists(pid): os.system('rm -f ' + pid);
-        os.system(fpm + ' start');
+        if not os.path.exists(cgi): public.ExecShell('rm -f ' + cgi);
+        if not os.path.exists(pid): public.ExecShell('rm -f ' + pid);
+        public.ExecShell(fpm + ' start');
         if checkPHPVersion(version): return True;
         
         #检查是否正确启动
@@ -355,9 +360,9 @@ def checkPHPVersion(version):
                 isStatus = public.readFile(isTask);
                 if isStatus == 'True': return True;
             filename = '/etc/init.d/nginx';
-            if os.path.exists(filename): os.system(filename + ' start');
+            if os.path.exists(filename): public.ExecShell(filename + ' start');
             filename = '/etc/init.d/httpd';
-            if os.path.exists(filename): os.system(filename + ' start');
+            if os.path.exists(filename): public.ExecShell(filename + ' start');
             
         return True;
     except:
@@ -366,7 +371,7 @@ def checkPHPVersion(version):
 
 #检测PHPINFO配置
 def CheckPHPINFO():
-    php_versions = ['53','54','55','56','70','71','72'];
+    php_versions = ['53','54','55','56','70','71','72','73','74'];
     setupPath = '/www/server';
     path = setupPath +'/panel/vhost/nginx/phpinfo.conf';
     if not os.path.exists(path):
@@ -422,6 +427,24 @@ def check502Task():
         time.sleep(600);
         check502Task();
 
+# 检查面板证书是否有更新
+def check_panel_ssl():
+    try:
+        while True:
+            lets_info = public.readFile("/www/server/panel/ssl/lets.info")
+            if lets_info:
+                lets_info = json.loads(lets_info)
+                cert_info_file = "/www/server/panel/vhost/ssl/" + lets_info["domain"] + "/info.json"
+                cert_info = public.readFile(cert_info_file)
+                if cert_info:
+                    cert_info = json.loads(cert_info)
+                    if setPanelLets.setPanelLets().copy_cert(cert_info):
+                        strTime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(time.time())))
+                        public.writeFile("/tmp/panelSSL.pl","{} 面板证书更新成功".format(strTime))
+            time.sleep(60)
+    except:
+        e = public.get_error_info()
+        public.writeFile("/tmp/panelSSL.pl", str(e))
 
 #监控面板状态
 def panel_status():
@@ -432,20 +455,87 @@ def panel_status():
     port = '8888'
     if os.path.exists(panel_path + '/data/port.pl'): port = public.readFile(panel_path + '/data/port.pl').strip()
     panel_url = pool + '127.0.0.1:' + port + '/service_status'
+    panel_pid = get_panel_pid()
+    n = 0
+    s = 0
+    v = 0
     while True:
-        time.sleep(1)
-        result = public.httpGet(panel_url)
-        if result == 'True':
-            time.sleep(10)
-            continue
-        os.system("/etc/init.d/bt reload &")
+        time.sleep(5)
+        check_session()
+        if not panel_pid: panel_pid = get_panel_pid()
+        if not panel_pid: run_panel()
 
-        result = public.httpGet(panel_url)
-        if result == 'True':
-            public.WriteLog('守护程序','检查到面板服务异常,已自动恢复!')
-            time.sleep(10)
+        try:
+            f = psutil.Process(panel_pid).cmdline()[-1]
+            if f.find('runserver') == -1 and f.find('BT-Panel') == -1: 
+                run_panel()
+                time.sleep(3)
+                panel_pid = get_panel_pid()
+                continue
+        except:
+            run_panel()
+            time.sleep(3)
+            panel_pid = get_panel_pid()
             continue
-        public.WriteLog('守护程序','检查到面板服务异常,自动恢复失败!')
+
+        n += 1
+        v += 1
+
+        if v > 10:
+            v = 0
+            log_path = panel_path + '/logs/error.log'
+            if os.path.exists(log_path):
+                e_body = public.GetNumLines(log_path,10)
+                if e_body:
+                    if e_body.find('PyWSGIServer.do_close') != -1 or e_body.find('Expected GET method:')!=-1 or e_body.find('Invalid HTTP method:') != -1 or e_body.find('table session') != -1:
+                        result = public.httpGet(panel_url)
+                        if result != 'True':
+                            if e_body.find('table session') != -1:
+                                sess_file = '/dev/shm/session.db'
+                                if os.path.exists(sess_file): os.remove(sess_file)
+                            public.ExecShell("/etc/init.d/bt reload &")
+                            time.sleep(10)
+                            result = public.httpGet(panel_url)
+                            if result == 'True':
+                                public.WriteLog('守护程序','检查到面板服务异常,已自动恢复!')
+
+        if n > 18000:
+            n = 0
+            result = public.httpGet(panel_url)
+            if result == 'True':
+                time.sleep(10)
+                continue
+            public.ExecShell("/etc/init.d/bt reload &")
+            result = public.httpGet(panel_url)
+            if result == 'True':
+                public.WriteLog('守护程序','检查到面板服务异常,已自动恢复!')
+                time.sleep(10)
+                continue
+
+
+def run_panel():
+    public.ExecShell("/etc/init.d/bt start &")
+
+def check_session():
+    try:
+        session_file = '/dev/shm/session.db'
+        if not os.path.exists(session_file): #如果session文件不存在
+            return False
+        s_size = os.path.getsize(session_file)
+        if s_size < 1024 * 1024 * 2: return False
+        if s_size > 1024 * 1024 * 10:
+            #大于10MB
+            if os.path.exists(session_file): os.remove(session_file)
+            public.ExecShell("/etc/init.d/bt reload &")
+        else:
+            sql = db.Sql()
+            sql._Sql__DB_FILE = session_file
+            sql.table('session').where('expiry<?',(public.format_date())).delete()
+            sql.table('session').execute('VACUUM',())
+            sql.close()
+        return True
+    except:
+        return False
 
 #重启面板服务
 def restart_panel_service():
@@ -454,12 +544,30 @@ def restart_panel_service():
     while True:
         if os.path.exists(rtips):
             os.remove(rtips)
-            os.system("/etc/init.d/bt restart &")
+            public.ExecShell("/etc/init.d/bt restart &")
         if os.path.exists(reload_tips):
             os.remove(reload_tips)
-            os.system("/etc/init.d/bt reload &")
+            public.ExecShell("/etc/init.d/bt reload &")
         time.sleep(1)
 
+#取面板pid
+def get_panel_pid():
+    for pid in psutil.pids():
+        try:
+            p = psutil.Process(pid)
+            n = p.cmdline()[-1]
+            if n.find('runserver') != -1 or n.find('BT-Panel') != -1: return pid
+        except: pass
+    return None
+
+#执行后台程序
+def panel_task_run():
+    while True:
+        panel_task_start()
+        time.time(3)
+
+def panel_task_start():
+    pass
 
 #自动结束异常进程
 def btkill():
@@ -468,7 +576,11 @@ def btkill():
     b.start();
 
 if __name__ == "__main__":
-    os.system('rm -rf /www/server/phpinfo/*');
+    #if public.ExecShell("ps aux|grep 'python task.py'|grep -v grep|wc -l")[0].strip() != '1':
+        #print("INFO: 任务进程已存在!")
+        #exit();
+
+    public.ExecShell('rm -rf /www/server/phpinfo/*');
     if os.path.exists('/www/server/nginx/sbin/nginx'):
         pfile = '/www/server/nginx/conf/enable-php-72.conf';
         if not os.path.exists(pfile):
@@ -497,8 +609,17 @@ if __name__ == "__main__":
     p = threading.Thread(target=restart_panel_service)
     p.setDaemon(True)
     p.start()
+    
+    p = threading.Thread(target=check_panel_ssl)
+    p.setDaemon(True)
+    p.start()
 
-    public.check_home()
+    task_obj = panelTask.bt_task()
+    p = threading.Thread(target=task_obj.start_task)
+    p.setDaemon(True)
+    p.start()
+
+    #public.check_home()
 
     startTask()
 

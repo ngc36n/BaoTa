@@ -20,19 +20,39 @@ class panelAuth:
     __product_id = '100000011';
     
     def create_serverid(self,get):
-        userPath = 'data/userInfo.json';
-        if not os.path.exists(userPath): return public.returnMsg(False,'请先登陆宝塔官网用户');
-        tmp = public.readFile(userPath);
-        if len(tmp) < 2: tmp = '{}'
-        data = json.loads(tmp);
-        if not data: return public.returnMsg(False,'请先登陆宝塔官网用户');
-        if not hasattr(data,'serverid'):
-            s1 = self.get_mac_address() + self.get_hostname()
-            s2 = self.get_cpuname();
-            serverid = public.md5(s1) + public.md5(s2);
-            data['serverid'] = serverid;
-            public.writeFile(userPath,json.dumps(data));
-        return data;
+        try:
+            userPath = 'data/userInfo.json';
+            if not os.path.exists(userPath): return public.returnMsg(False,'请先登陆宝塔官网用户');
+            tmp = public.readFile(userPath);
+            if len(tmp) < 2: tmp = '{}'
+            data = json.loads(tmp);
+            if not data: return public.returnMsg(False,'请先登陆宝塔官网用户');
+            if not 'serverid' in data:
+                s1 = self.get_mac_address() + self.get_hostname()
+                s2 = self.get_cpuname();
+                serverid = public.md5(s1) + public.md5(s2);
+                data['serverid'] = serverid;
+                public.writeFile(userPath,json.dumps(data));
+            return data;
+        except: return public.returnMsg(False,'请先登陆宝塔官网用户');
+
+
+    def create_plugin_other_order(self,get):
+        pdata = self.create_serverid(get)
+        pdata['pid'] = get.pid;
+        pdata['cycle'] = get.cycle
+        p_url = public.GetConfigValue('home') + '/api/Pluginother/create_order'
+        if get.type == '1':
+            pdata['renew'] = 1;
+            p_url = public.GetConfigValue('home') + '/api/Pluginother/renew_order'
+        return json.loads(public.httpPost(p_url,pdata))
+
+    def get_order_stat(self,get):
+        pdata = self.create_serverid(get)
+        pdata['order_id'] = get.oid;
+        p_url = public.GetConfigValue('home') + '/api/Pluginother/order_stat'
+        if get.type == '1':  p_url = public.GetConfigValue('home') + '/api/Pluginother/re_order_stat'
+        return json.loads(public.httpPost(p_url,pdata))
     
     def check_serverid(self,get):
         if get.serverid != self.create_serverid(get): return False;
@@ -145,6 +165,7 @@ class panelAuth:
         try:
             cloudURL = 'http://www.bt.cn/api/Plugin/';
             userInfo = self.create_serverid(None);
+            params['os'] = 'Linux';
             if 'status' in userInfo:
                 params['uid'] = 0;
                 params['serverid'] = '';
@@ -161,6 +182,7 @@ class panelAuth:
         try:
             cloudURL = 'http://www.bt.cn/api/invite/';
             userInfo = self.create_serverid(None);
+            params['os'] = 'Linux';
             if 'status' in userInfo:
                 params['uid'] = 0;
                 params['serverid'] = '';

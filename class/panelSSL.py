@@ -11,7 +11,7 @@
 # SSL接口
 #------------------------------
 import public,os,sys,binascii,urllib,json,time,datetime
-from BTPanel import cache
+from BTPanel import cache,session
 class panelSSL:
     __APIURL = 'http://www.bt.cn/api/Auth';
     __UPATH = 'data/userInfo.json';
@@ -25,13 +25,20 @@ class panelSSL:
         if os.path.exists(self.__UPATH):
             my_tmp = public.readFile(self.__UPATH)
             if my_tmp:
-                self.__userInfo = json.loads(my_tmp);
+                try:
+                    self.__userInfo = json.loads(my_tmp);
+                except:
+                    self.__userInfo = {}
             else:
                 self.__userInfo = {}
-
-            if self.__userInfo:
-                pdata['access_key'] = self.__userInfo['access_key'];
-                data['secret_key'] = self.__userInfo['secret_key'];
+            try:
+                if self.__userInfo:
+                    pdata['access_key'] = self.__userInfo['access_key'];
+                    data['secret_key'] = self.__userInfo['secret_key'];
+            except:
+                self.__userInfo = {}
+                pdata['access_key'] = 'test';
+                data['secret_key'] = '123456';
         else:
             pdata['access_key'] = 'test';
             data['secret_key'] = '123456';
@@ -52,15 +59,15 @@ class panelSSL:
             result['data'] = self.En_Code(result['data']);
             if result['data']: public.writeFile(self.__UPATH,json.dumps(result['data']));
             del(result['data']);
-            cache.delete('plugin_soft_list')
+            session['focre_cloud'] = True
             return result;
         except Exception as ex:
             return public.returnMsg(False,'连接服务器失败!<br>' + str(rtmp))
     
     #删除Token
     def DelToken(self,get):
-        os.system("rm -f " + self.__UPATH);
-        cache.delete('plugin_soft_list')
+        public.ExecShell("rm -f " + self.__UPATH);
+        session['focre_cloud'] = True
         return public.returnMsg(True,"SSL_BTUSER_UN");
     
     #获取用户信息
@@ -86,9 +93,16 @@ class panelSSL:
             path =   '/etc/letsencrypt/live/'+ get.siteName + '/partnerOrderId';
             if os.path.exists(path):
                 self.__PDATA['data']['partnerOrderId'] = public.readFile(path);
-        
+            else:
+                path = '/www/server/panel/vhost/cert/' + get.siteName + '/partnerOrderId';
+                if os.path.exists(path):
+                    self.__PDATA['data']['partnerOrderId'] = public.readFile(path);
+
         self.__PDATA['data'] = self.De_Code(self.__PDATA['data']);
-        result = json.loads(public.httpPost(self.__APIURL + '/GetSSLList',self.__PDATA));
+        rs = public.httpPost(self.__APIURL + '/GetSSLList',self.__PDATA)
+        try:
+            result = json.loads(rs);
+        except: return public.returnMsg(False,'获取失败，请稍候重试!')
 
         result['data'] = self.En_Code(result['data']);
         for i in range(len(result['data'])):
@@ -115,6 +129,10 @@ class panelSSL:
         else:
             get.siteName = public.M('sites').where('id=?',(get.id,)).getField('name');
         
+        if get.domain[:4] == 'www.':
+            if not public.M('domain').where('name=?',(get.domain[4:],)).count():
+                return public.returnMsg(False,"申请[%s]证书需要验证[%s]请将[%s]绑定并解析到站点!" % (get.domain,get.domain[4:],get.domain[4:]))
+
         runPath = self.GetRunPath(get);
         if runPath != False and runPath != '/': get.path +=  runPath;
         authfile = get.path + '/.well-known/pki-validation/fileauth.txt';
@@ -154,7 +172,7 @@ class panelSSL:
         try:
             epass = public.GetRandomString(32);
             spath = get.path + '/.well-known/pki-validation';
-            if not os.path.exists(spath): os.system("mkdir -p '" + spath + "'");
+            if not os.path.exists(spath): public.ExecShell("mkdir -p '" + spath + "'");
             public.writeFile(spath + '/fileauth.txt',epass);
             result = public.httpGet('http://' + get.domain + '/.well-known/pki-validation/fileauth.txt');
             if result == epass: return True
@@ -170,17 +188,38 @@ class panelSSL:
             get.path = public.M('sites').where('name=?',(get.siteName,)).getField('path');
             runPath = self.GetRunPath(get);
             if runPath != False and runPath != '/': get.path +=  runPath;
-            sslInfo = json.loads(public.httpPost(self.__APIURL + '/SyncOrder',self.__PDATA));
+            tmp = public.httpPost(self.__APIURL + '/SyncOrder',self.__PDATA)
+            try:
+                sslInfo = json.loads(tmp);
+            except:
+                return public.returnMsg(False,tmp)
+
             sslInfo['data'] = self.En_Code(sslInfo['data']);
             try:
                 spath = get.path + '/.well-known/pki-validation';
-                if not os.path.exists(spath): os.system("mkdir -p '" + spath + "'");
+                if not os.path.exists(spath): public.ExecShell("mkdir -p '" + spath + "'");
                 public.writeFile(spath + '/fileauth.txt',sslInfo['data']['authValue']);
             except:
                 return public.returnMsg(False,'SSL_CHECK_WRITE_ERR');
-        result = json.loads(public.httpPost(self.__APIURL + '/Completed',self.__PDATA));
-        result['data'] = self.En_Code(result['data']);
-        return result;
+        try:
+            result = json.loads(public.httpPost(self.__APIURL + '/Completed',self.__PDATA));
+        except:
+            result = public.returnMsg(True,'检测中..');
+        n = 0;
+        my_ok = False
+        while True:
+            if n > 5: break;
+            time.sleep(5);
+            rRet = json.loads(public.httpPost(self.__APIURL + '/SyncOrder',self.__PDATA));
+            n +=1
+            rRet['data'] = self.En_Code(rRet['data']);
+            try:
+                if rRet['data']['stateCode'] == 'COMPLETED': 
+                    my_ok = True
+                    break;
+            except: return public.get_error_info()
+        if not my_ok: return result;
+        return rRet;
     
     #同步指定订单
     def SyncOrder(self,get):
@@ -194,14 +233,16 @@ class panelSSL:
     def GetSSLInfo(self,get):
         self.__PDATA['data']['partnerOrderId'] = get.partnerOrderId;
         self.__PDATA['data'] = self.De_Code(self.__PDATA['data']);
+        time.sleep(3);
         result = json.loads(public.httpPost(self.__APIURL + '/GetSSLInfo',self.__PDATA));
         result['data'] = self.En_Code(result['data']);
+        if not 'privateKey' in result['data']: return result
         
         #写配置到站点
         if hasattr(get,'siteName'):
             try:
                 siteName = get.siteName;
-                path =   '/etc/letsencrypt/live/'+ siteName;
+                path = '/www/server/panel/vhost/cert/' + siteName;
                 if not os.path.exists(path):
                     public.ExecShell('mkdir -p ' + path)
                 csrpath = path+"/fullchain.pem";
@@ -224,8 +265,8 @@ class panelSSL:
                 panelSite.panelSite().SetSSLConf(get);
                 public.serviceReload();
                 return public.returnMsg(True,'SET_SUCCESS');
-            except Exception as ex:
-                return public.returnMsg(False,'SET_ERROR,' + str(ex));
+            except:
+                return public.returnMsg(False,'SET_ERROR');
         result['data'] = self.En_Code(result['data']);
         return result;
     
@@ -233,8 +274,9 @@ class panelSSL:
     def SetCertToSite(self,get):
         try:
             result = self.GetCert(get)
+            if not 'privkey' in result: return result
             siteName = get.siteName;
-            path =   '/etc/letsencrypt/live/'+ siteName;
+            path = '/www/server/panel/vhost/cert/' + siteName;
             if not os.path.exists(path):
                 public.ExecShell('mkdir -p ' + path)
             csrpath = path+"/fullchain.pem";
@@ -257,13 +299,13 @@ class panelSSL:
             public.serviceReload();
             return public.returnMsg(True,'SET_SUCCESS');
         except Exception as ex:
-            return public.returnMsg(False,'SET_ERROR,' + str(ex));
+            return public.returnMsg(False,'SET_ERROR,' + public.get_error_info());
     
     #获取证书列表
     def GetCertList(self,get):
         try:
             vpath = '/www/server/panel/vhost/ssl'
-            if not os.path.exists(vpath): os.system("mkdir -p " + vpath);
+            if not os.path.exists(vpath): public.ExecShell("mkdir -p " + vpath);
             data = []
             for d in os.listdir(vpath):
                 mpath = vpath + '/' + d + '/info.json';
@@ -279,9 +321,9 @@ class panelSSL:
     #删除证书
     def RemoveCert(self,get):
         try:
-            vpath = '/www/server/panel/vhost/ssl/' + get.certName
+            vpath = '/www/server/panel/vhost/ssl/' + get.certName.replace("*.",'')
             if not os.path.exists(vpath): return public.returnMsg(False,'证书不存在!');
-            os.system("rm -rf " + vpath)
+            public.ExecShell("rm -rf " + vpath)
             return public.returnMsg(True,'证书已删除!');
         except:
             return public.returnMsg(False,'删除失败!');
@@ -292,8 +334,9 @@ class panelSSL:
             certInfo = self.GetCertName(get)
             if not certInfo: return public.returnMsg(False,'证书解析失败!');
             vpath = '/www/server/panel/vhost/ssl/' + certInfo['subject'];
+            vpath=vpath.replace("*.",'')
             if not os.path.exists(vpath):
-                os.system("mkdir -p " + vpath);
+                public.ExecShell("mkdir -p " + vpath);
             public.writeFile(vpath + '/privkey.pem',public.readFile(get.keyPath));
             public.writeFile(vpath + '/fullchain.pem',public.readFile(get.certPath));
             public.writeFile(vpath + '/info.json',json.dumps(certInfo));
@@ -303,7 +346,7 @@ class panelSSL:
     
     #读取证书
     def GetCert(self,get):
-        vpath = '/www/server/panel/vhost/ssl/' + get.certName
+        vpath = os.path.join('/www/server/panel/vhost/ssl' , get.certName.replace("*.",''))
         if not os.path.exists(vpath): return public.returnMsg(False,'证书不存在!')
         data = {}
         data['privkey'] = public.readFile(vpath + '/privkey.pem')
@@ -311,7 +354,7 @@ class panelSSL:
         return data;
     
     #获取证书名称
-    def GetCertName(self,get):
+    def GetCertName(self,get):            
         try:
             openssl = '/usr/local/openssl/bin/openssl';
             if not os.path.exists(openssl): openssl = 'openssl';
@@ -321,12 +364,16 @@ class panelSSL:
             data['subject'] = tmp[0].split('=')[-1]
             data['notAfter'] = self.strfToTime(tmp[1].split('=')[1])
             data['notBefore'] = self.strfToTime(tmp[2].split('=')[1])
-            data['issuer'] = tmp[3].split('O=')[-1].split(',')[0]
+            if tmp[3].find('O=') == -1:
+                data['issuer'] = tmp[3].split('CN=')[-1]
+            else:
+                data['issuer'] = tmp[3].split('O=')[-1].split(',')[0]
             if data['issuer'].find('/') != -1: data['issuer'] = data['issuer'].split('/')[0];
             result = public.ExecShell(openssl + " x509 -in "+get.certPath+" -noout -text|grep DNS")
             data['dns'] = result[0].replace('DNS:','').replace(' ','').strip().split(',');
             return data;
         except:
+            print(public.get_error_info())
             return None;
     
     #转换时间
@@ -364,6 +411,31 @@ class panelSSL:
         if type(result) != str: result = result.decode('utf-8')
         return json.loads(result);
     
-    
-    
-    
+    # 手动一键续签
+    def renew_lets_ssl(self, get):
+        if not os.path.exists('vhost/cert/crontab.json'):  
+            return public.returnMsg(False,'当前没有可以续订的证书!')      
+        
+        old_list = json.loads(public.ReadFile("vhost/cert/crontab.json"))
+        cron_list = old_list
+        if hasattr(get, 'siteName'):
+            if not get.siteName in old_list:
+                return public.returnMsg(False,'当前网站没有可以续订的证书.')  
+            cron_list = {}
+            cron_list[get.siteName] = old_list[get.siteName]
+
+        import panelLets
+        lets = panelLets.panelLets()
+
+        result = {}
+        result['status'] = True
+        result['sucess_list']  = []
+        result['err_list'] = []
+        for siteName in cron_list:
+            data = cron_list[siteName]
+            ret = lets.renew_lest_cert(data)
+            if ret['status']:
+                result['sucess_list'].append(siteName)
+            else:
+                result['err_list'].append({"siteName":siteName,"msg":ret['msg']})
+        return result;

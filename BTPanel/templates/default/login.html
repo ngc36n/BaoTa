@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-    <link rel="icon" href="/static/favicon.ico" type="image/x-icon" />
     <link rel="shortcut icon" href="/static/favicon.ico" type="image/x-icon" />
     <title>{{g.title}}</title>
     <link rel="stylesheet" type="text/css" href="/static/css/site.css?date={{g.version}}">
@@ -206,6 +205,7 @@
     <script type="text/javascript" src="/static/layer/layer.js"></script>
     <script type="text/javascript" src="/static/js/jquery.qrcode.min.js"></script>
     <script type="text/javascript" src="/static/js/Validform_v5.3.2_min.js"></script>
+    <script type="text/javascript" src="/static/js/md5.js"></script>
     <script type="text/javascript">
         function Wreset() {
             var w = $(window).width();
@@ -288,17 +288,53 @@
         });
 
         $('#login-button').click(function () {
-            var username = encodeURIComponent($("input[name='username']").val());
-            var password = encodeURIComponent($("input[name='password']").val());
+            var username = $("input[name='username']").val();
+            var password = $("input[name='password']").val();
             var code = $("input[name='code']").val();
             if (username == '' || password == '') {
                 layer.msg("{{data['lan']['JS1']}}", { icon: 2 });
                 return;
             }
 
-            var data = 'username=' + username + '&password=' + password + '&code=' + code;
+            var data = { username: username, password: md5(md5(password) + '' + '_bt.cn'), code: code }
             var loadT = layer.msg("{{data['lan']['JS2']}}", { icon: 16, time: 0, shade: [0.3, '#000'] });
             $.post('/login', data, function (rdata) {
+            	if(rdata == '1'){
+                    layer.close(loadT);
+            		layer.open({
+                        type:1,
+                        title:false,
+                        area: ['350px', '265px'],
+                        content:'<div class="verification_view">\
+                                    <div class="v_title">Google身份认证</div>\
+                                    <div class="v_input"><input type="text" class="v_code" name="v_code" placeholder="请输入动态口令"/></div>\
+                                    <div class="v_btn"><input id="auth_verif_btn" value="验证并登录" type="submit"></div>\
+                                    <div class="v_tips">* 请使用Google身份验证器APP获取验证代码<br><a target="_blank" href="https://www.bt.cn/bbs/forum.php?mod=viewthread&tid=37437"  class="btlink">无法验证,点击帮助</a></div>\
+                                </div>',
+                        success:function(){
+                            // 点击验证登录
+                            $('[name="v_code"]').keyup(function(e){
+                                if(e.keyCode == 13){
+                                    $('#auth_verif_btn').click();
+                                }
+                            });
+                            $('#auth_verif_btn').click(function(e){
+                                data['vcode'] = $('[name="v_code"]').val();
+                                var loadT = layer.msg("{{data['lan']['JS2']}}", { icon: 16, time: 0, shade: [0.3, '#000'] });
+                                $.post('/login', data, function (rdata) {
+                                    layer.close(loadT);
+                                    if(!rdata.status){
+                                        layer.msg(rdata.msg, { icon: 2 });
+                                        return false;
+                                    }
+                                    layer.msg(rdata.msg, { icon: 16, time: 0, shade: [0.3, '#000'] });
+                                    window.location.href = '/';
+                                });
+                            });
+                        }
+                    });
+                    return false;
+            	}
                 layer.close(loadT);
                 if (!rdata.status) {
                     $("#errorStr").html(rdata.msg);
